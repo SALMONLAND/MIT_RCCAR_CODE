@@ -1,0 +1,232 @@
+import tkinter as tk
+from tkinter import ttk, scrolledtext
+import serial
+import serial.tools.list_ports
+import threading
+import time
+import re
+
+class ArduinoMonitor:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("🎯 아두이노 물체 감지 모니터")
+        self.root.geometry("900x700")
+        self.root.configure(bg='#1a1a2e')
+        
+        self.serial_port = None
+        self.is_running = False
+        self.score = 0
+        self.distance = 0
+        self.status = "대기 중"
+        
+        self.setup_ui()
+        
+    def setup_ui(self):
+        # 상단 프레임 - 연결 설정
+        top_frame = tk.Frame(self.root, bg='#16213e', padx=15, pady=15)
+        top_frame.pack(fill='x')
+        
+        tk.Label(top_frame, text="포트 선택:", bg='#16213e', fg='white', 
+                font=('맑은 고딕', 11, 'bold')).pack(side='left', padx=5)
+        
+        self.port_combo = ttk.Combobox(top_frame, width=20, state='readonly', 
+                                       font=('맑은 고딕', 10))
+        self.port_combo.pack(side='left', padx=5)
+        self.refresh_ports()
+        
+        self.connect_btn = tk.Button(top_frame, text="🔌 연결", command=self.toggle_connection,
+                                     bg='#0f3460', fg='white', font=('맑은 고딕', 11, 'bold'),
+                                     padx=25, pady=8, relief='flat', cursor='hand2')
+        self.connect_btn.pack(side='left', padx=10)
+        
+        self.refresh_btn = tk.Button(top_frame, text="🔄 새로고침", command=self.refresh_ports,
+                                     bg='#533483', fg='white', font=('맑은 고딕', 10),
+                                     padx=15, pady=8, relief='flat', cursor='hand2')
+        self.refresh_btn.pack(side='left', padx=5)
+        
+        self.status_label = tk.Label(top_frame, text="● 연결 안됨", bg='#16213e', 
+                                     fg='#ff4757', font=('맑은 고딕', 10, 'bold'))
+        self.status_label.pack(side='right', padx=10)
+        
+        # 메인 표시 영역
+        main_frame = tk.Frame(self.root, bg='#1a1a2e', padx=20, pady=10)
+        main_frame.pack(fill='both', expand=True)
+        
+        # 점수 표시
+        score_frame = tk.Frame(main_frame, bg='#0f3460', relief='raised', bd=3)
+        score_frame.pack(fill='x', pady=(0, 15))
+        
+        tk.Label(score_frame, text="🏆 현재 점수", bg='#0f3460', fg='#ffa502',
+                font=('맑은 고딕', 16, 'bold')).pack(pady=(15, 5))
+        
+        self.score_display = tk.Label(score_frame, text="0", bg='#0f3460', fg='white',
+                                      font=('맑은 고딕', 60, 'bold'))
+        self.score_display.pack(pady=(0, 15))
+        
+        # 거리 및 상태 표시
+        info_frame = tk.Frame(main_frame, bg='#1a1a2e')
+        info_frame.pack(fill='x', pady=(0, 15))
+        
+        # 거리 표시
+        distance_frame = tk.Frame(info_frame, bg='#16213e', relief='raised', bd=2)
+        distance_frame.pack(side='left', fill='both', expand=True, padx=(0, 10))
+        
+        tk.Label(distance_frame, text="📏 거리", bg='#16213e', fg='#48dbfb',
+                font=('맑은 고딕', 14, 'bold')).pack(pady=(10, 5))
+        
+        self.distance_display = tk.Label(distance_frame, text="-- cm", bg='#16213e', fg='white',
+                                         font=('맑은 고딕', 36, 'bold'))
+        self.distance_display.pack(pady=(0, 10))
+        
+        # 상태 표시
+        status_frame = tk.Frame(info_frame, bg='#16213e', relief='raised', bd=2)
+        status_frame.pack(side='left', fill='both', expand=True)
+        
+        tk.Label(status_frame, text="📊 상태", bg='#16213e', fg='#48dbfb',
+                font=('맑은 고딕', 14, 'bold')).pack(pady=(10, 5))
+        
+        self.status_display = tk.Label(status_frame, text="대기 중", bg='#16213e', fg='#95afc0',
+                                       font=('맑은 고딕', 24, 'bold'))
+        self.status_display.pack(pady=(0, 10))
+        
+        # 로그 영역
+        log_frame = tk.Frame(main_frame, bg='#16213e', relief='raised', bd=2)
+        log_frame.pack(fill='both', expand=True)
+        
+        tk.Label(log_frame, text="📋 실시간 로그", bg='#16213e', fg='white',
+                font=('맑은 고딕', 12, 'bold')).pack(anchor='w', padx=10, pady=(10, 5))
+        
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=10, 
+                                                  bg='#0f0f0f', fg='#00ff00',
+                                                  font=('Consolas', 10),
+                                                  insertbackground='white')
+        self.log_text.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+        
+        # 하단 버튼
+        bottom_frame = tk.Frame(self.root, bg='#16213e', padx=15, pady=15)
+        bottom_frame.pack(fill='x')
+        
+        self.clear_btn = tk.Button(bottom_frame, text="🗑️ 로그 지우기", command=self.clear_log,
+                                   bg='#e84118', fg='white', font=('맑은 고딕', 10),
+                                   padx=20, pady=8, relief='flat', cursor='hand2')
+        self.clear_btn.pack(side='left', padx=5)
+        
+        self.reset_btn = tk.Button(bottom_frame, text="🔄 점수 초기화", command=self.reset_score,
+                                   bg='#e67e22', fg='white', font=('맑은 고딕', 10),
+                                   padx=20, pady=8, relief='flat', cursor='hand2')
+        self.reset_btn.pack(side='left', padx=5)
+        
+    def refresh_ports(self):
+        ports = serial.tools.list_ports.comports()
+        port_list = [port.device for port in ports]
+        self.port_combo['values'] = port_list
+        if port_list:
+            self.port_combo.current(0)
+            # 로그 텍스트가 생성된 후에만 로그 추가
+            if hasattr(self, 'log_text'):
+                self.add_log(f"✓ 사용 가능한 포트: {', '.join(port_list)}")
+        else:
+            if hasattr(self, 'log_text'):
+                self.add_log("⚠️ 사용 가능한 포트가 없습니다")
+    
+    def toggle_connection(self):
+        if not self.is_running:
+            self.start_connection()
+        else:
+            self.stop_connection()
+    
+    def start_connection(self):
+        port = self.port_combo.get()
+        if not port:
+            self.add_log("❌ 포트를 선택해주세요")
+            return
+        
+        try:
+            self.serial_port = serial.Serial(port, 9600, timeout=1)
+            time.sleep(2)  # 아두이노 리셋 대기
+            self.is_running = True
+            
+            self.connect_btn.config(text="🔌 연결 해제", bg='#e84118')
+            self.status_label.config(text="● 연결됨", fg='#2ed573')
+            self.add_log(f"✓ {port} 포트에 연결되었습니다")
+            
+            # 읽기 스레드 시작
+            self.read_thread = threading.Thread(target=self.read_serial, daemon=True)
+            self.read_thread.start()
+            
+        except Exception as e:
+            self.add_log(f"❌ 연결 실패: {str(e)}")
+    
+    def stop_connection(self):
+        self.is_running = False
+        if self.serial_port:
+            self.serial_port.close()
+        
+        self.connect_btn.config(text="🔌 연결", bg='#0f3460')
+        self.status_label.config(text="● 연결 안됨", fg='#ff4757')
+        self.add_log("✓ 연결이 해제되었습니다")
+    
+    def read_serial(self):
+        while self.is_running:
+            try:
+                if self.serial_port and self.serial_port.in_waiting:
+                    line = self.serial_port.readline().decode('utf-8', errors='ignore').strip()
+                    if line:
+                        self.process_line(line)
+            except Exception as e:
+                self.add_log(f"❌ 읽기 오류: {str(e)}")
+                self.stop_connection()
+                break
+            time.sleep(0.05)
+    
+    def process_line(self, line):
+        self.add_log(line)
+        
+        # 점수 추출
+        if "점수:" in line or "💎 점수:" in line:
+            match = re.search(r'(\d+)\s*점', line)
+            if match:
+                self.score = int(match.group(1))
+                self.update_score()
+        
+        # 거리 추출
+        if "거리:" in line:
+            match = re.search(r'거리:\s*([\d.]+)\s*cm', line)
+            if match:
+                self.distance = float(match.group(1))
+                self.update_distance()
+        
+        # 상태 업데이트
+        if "🎉" in line or "물체 감지" in line:
+            self.update_status("✅ 감지!", "#2ed573")
+        elif "감지 중" in line or "🔴" in line:
+            self.update_status("🔴 감지 중", "#ff4757")
+        elif "대기 중" in line or "⚪" in line:
+            self.update_status("⚪ 대기 중", "#95afc0")
+    
+    def update_score(self):
+        self.score_display.config(text=str(self.score))
+    
+    def update_distance(self):
+        self.distance_display.config(text=f"{self.distance:.1f} cm")
+    
+    def update_status(self, status, color):
+        self.status_display.config(text=status, fg=color)
+    
+    def add_log(self, message):
+        self.log_text.insert(tk.END, f"[{time.strftime('%H:%M:%S')}] {message}\n")
+        self.log_text.see(tk.END)
+    
+    def clear_log(self):
+        self.log_text.delete(1.0, tk.END)
+        self.add_log("로그가 초기화되었습니다")
+    
+    def reset_score(self):
+        self.score = 0
+        self.update_score()
+        self.add_log("점수가 초기화되었습니다")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = ArduinoMonitor(root)
+    root.mainloop()
