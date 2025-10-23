@@ -1,0 +1,340 @@
+import tkinter as tk
+from tkinter import ttk, messagebox
+import serial
+import serial.tools.list_ports
+import threading
+import time
+
+class AirHockeyMonitor:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("🏒 Air Hockey Score Monitor")
+        self.root.geometry("1400x800")
+        self.root.configure(bg='#0a0a0a')
+        
+        self.serial_ports = {'player1': None, 'player2': None}
+        self.is_connected = {'player1': False, 'player2': False}
+        
+        # 점수 데이터
+        self.player1_data = {
+            'score': 0,
+            'distance': 0,
+            'status': 'ready'
+        }
+        
+        self.player2_data = {
+            'score': 0,
+            'distance': 0,
+            'status': 'ready'
+        }
+        
+        self.game_status = 'ready'  # ready, playing, finished
+        self.max_score = 7  # 목표 점수
+        
+        self.setup_ui()
+        
+    def setup_ui(self):
+        # 상단 연결 프레임
+        top_frame = tk.Frame(self.root, bg='#1a1a1a', padx=20, pady=15)
+        top_frame.pack(fill='x')
+        
+        # Player 1 연결
+        tk.Label(top_frame, text="Player 1 포트:", bg='#1a1a1a', fg='white', 
+                font=('Arial', 11, 'bold')).pack(side='left', padx=5)
+        
+        self.port1_combo = ttk.Combobox(top_frame, width=15, state='readonly', 
+                                        font=('Arial', 10))
+        self.port1_combo.pack(side='left', padx=5)
+        
+        self.connect1_btn = tk.Button(top_frame, text="🔌 연결", 
+                                      command=lambda: self.toggle_connection('player1'),
+                                      bg='#00ff00', fg='black', font=('Arial', 11, 'bold'),
+                                      padx=20, pady=8, cursor='hand2')
+        self.connect1_btn.pack(side='left', padx=10)
+        
+        self.status1_label = tk.Label(top_frame, text="● 연결 안됨", bg='#1a1a1a', 
+                                      fg='#ff0000', font=('Arial', 11, 'bold'))
+        self.status1_label.pack(side='left', padx=10)
+        
+        # 구분선
+        tk.Label(top_frame, text="|", bg='#1a1a1a', fg='#444444', 
+                font=('Arial', 20)).pack(side='left', padx=20)
+        
+        # Player 2 연결
+        tk.Label(top_frame, text="Player 2 포트:", bg='#1a1a1a', fg='white', 
+                font=('Arial', 11, 'bold')).pack(side='left', padx=5)
+        
+        self.port2_combo = ttk.Combobox(top_frame, width=15, state='readonly', 
+                                        font=('Arial', 10))
+        self.port2_combo.pack(side='left', padx=5)
+        
+        self.connect2_btn = tk.Button(top_frame, text="🔌 연결", 
+                                      command=lambda: self.toggle_connection('player2'),
+                                      bg='#00ff00', fg='black', font=('Arial', 11, 'bold'),
+                                      padx=20, pady=8, cursor='hand2')
+        self.connect2_btn.pack(side='left', padx=10)
+        
+        self.status2_label = tk.Label(top_frame, text="● 연결 안됨", bg='#1a1a1a', 
+                                      fg='#ff0000', font=('Arial', 11, 'bold'))
+        self.status2_label.pack(side='left', padx=10)
+        
+        # 새로고침 및 리셋 버튼
+        self.refresh_btn = tk.Button(top_frame, text="🔄 새로고침", command=self.refresh_ports,
+                                     bg='#333333', fg='white', font=('Arial', 11),
+                                     padx=15, pady=8, cursor='hand2')
+        self.refresh_btn.pack(side='right', padx=5)
+        
+        self.reset_btn = tk.Button(top_frame, text="🔄 점수 리셋", command=self.reset_game,
+                                   bg='#cc0000', fg='white', font=('Arial', 11, 'bold'),
+                                   padx=20, pady=8, cursor='hand2')
+        self.reset_btn.pack(side='right', padx=5)
+        
+        # 게임 상태 표시
+        status_frame = tk.Frame(self.root, bg='#1a1a1a', padx=20, pady=15)
+        status_frame.pack(fill='x')
+        
+        self.game_status_label = tk.Label(status_frame, text="🏒 READY TO PLAY", bg='#1a1a1a', 
+                                          fg='#00ff00', font=('Arial', 28, 'bold'))
+        self.game_status_label.pack()
+        
+        tk.Label(status_frame, text=f"First to {self.max_score} goals wins!", 
+                bg='#1a1a1a', fg='#888888', font=('Arial', 14)).pack(pady=5)
+        
+        # 메인 스코어보드
+        main_frame = tk.Frame(self.root, bg='#0a0a0a', padx=10, pady=10)
+        main_frame.pack(fill='both', expand=True)
+        
+        # Player 1 영역
+        self.player1_frame = self.create_player_display(main_frame, 1, '#ff0000')
+        self.player1_frame.pack(side='left', fill='both', expand=True, padx=5)
+        
+        # VS 구분
+        vs_frame = tk.Frame(main_frame, bg='#0a0a0a', width=100)
+        vs_frame.pack(side='left', fill='y', padx=20)
+        tk.Label(vs_frame, text="VS", bg='#0a0a0a', fg='#ffff00',
+                font=('Arial', 48, 'bold')).pack(expand=True)
+        
+        # Player 2 영역
+        self.player2_frame = self.create_player_display(main_frame, 2, '#0066ff')
+        self.player2_frame.pack(side='left', fill='both', expand=True, padx=5)
+        
+        self.refresh_ports()
+        
+    def create_player_display(self, parent, player_num, color):
+        frame = tk.Frame(parent, bg='#1a1a1a', relief='solid', bd=3)
+        
+        # 헤더
+        header = tk.Frame(frame, bg=color, pady=20)
+        header.pack(fill='x')
+        
+        tk.Label(header, text=f"PLAYER {player_num}", bg=color, fg='white',
+                font=('Arial', 32, 'bold')).pack()
+        
+        # 메인 점수
+        score_frame = tk.Frame(frame, bg='#1a1a1a', pady=30)
+        score_frame.pack(fill='both', expand=True)
+        
+        tk.Label(score_frame, text="SCORE", bg='#1a1a1a', fg='#888888',
+                font=('Arial', 16)).pack()
+        
+        score_label = tk.Label(score_frame, text="0", bg='#1a1a1a', fg=color,
+                              font=('Arial', 120, 'bold'))
+        score_label.pack(pady=20)
+        
+        # 센서 거리
+        sensor_frame = tk.Frame(frame, bg='#2a2a2a', padx=20, pady=20)
+        sensor_frame.pack(fill='x', padx=20, pady=10)
+        
+        tk.Label(sensor_frame, text="📡 SENSOR DISTANCE", bg='#2a2a2a', fg='#888888',
+                font=('Arial', 12, 'bold')).pack()
+        
+        distance_label = tk.Label(sensor_frame, text="-- cm", bg='#2a2a2a', 
+                                 fg='white', font=('Courier', 28, 'bold'))
+        distance_label.pack(pady=10)
+        
+        distance_bar = tk.Canvas(sensor_frame, height=30, bg='#1a1a1a', 
+                                highlightthickness=0)
+        distance_bar.pack(fill='x', pady=10)
+        
+        # 상태
+        status_frame = tk.Frame(frame, bg='#1a1a1a', pady=15)
+        status_frame.pack(fill='x')
+        
+        status_label = tk.Label(status_frame, text="● READY", bg='#1a1a1a', 
+                               fg='#ffff00', font=('Arial', 14, 'bold'))
+        status_label.pack()
+        
+        # 위젯 참조 저장
+        frame.score_label = score_label
+        frame.distance_label = distance_label
+        frame.distance_bar = distance_bar
+        frame.status_label = status_label
+        
+        return frame
+        
+    def refresh_ports(self):
+        ports = serial.tools.list_ports.comports()
+        port_list = [port.device for port in ports]
+        self.port1_combo['values'] = port_list
+        self.port2_combo['values'] = port_list
+        if port_list:
+            if not self.port1_combo.get():
+                self.port1_combo.current(0)
+            if not self.port2_combo.get() and len(port_list) > 1:
+                self.port2_combo.current(1)
+    
+    def toggle_connection(self, player):
+        if not self.is_connected[player]:
+            self.connect_arduino(player)
+        else:
+            self.disconnect_arduino(player)
+    
+    def connect_arduino(self, player):
+        port = self.port1_combo.get() if player == 'player1' else self.port2_combo.get()
+        if not port:
+            messagebox.showerror("에러", "포트를 선택해주세요")
+            return
+        
+        try:
+            self.serial_ports[player] = serial.Serial(port, 9600, timeout=1)
+            time.sleep(2)  # Arduino 리셋 대기
+            self.is_connected[player] = True
+            
+            if player == 'player1':
+                self.connect1_btn.config(text="🔌 연결 해제", bg='#ff0000')
+                self.status1_label.config(text="● 연결됨", fg='#00ff00')
+            else:
+                self.connect2_btn.config(text="🔌 연결 해제", bg='#ff0000')
+                self.status2_label.config(text="● 연결됨", fg='#00ff00')
+            
+            # 읽기 스레드 시작
+            thread = threading.Thread(target=self.read_serial, args=(player,), daemon=True)
+            thread.start()
+            
+        except Exception as e:
+            messagebox.showerror("연결 실패", f"Arduino 연결 실패:\n{str(e)}")
+    
+    def disconnect_arduino(self, player):
+        self.is_connected[player] = False
+        if self.serial_ports[player]:
+            self.serial_ports[player].close()
+        
+        if player == 'player1':
+            self.connect1_btn.config(text="🔌 연결", bg='#00ff00')
+            self.status1_label.config(text="● 연결 안됨", fg='#ff0000')
+        else:
+            self.connect2_btn.config(text="🔌 연결", bg='#00ff00')
+            self.status2_label.config(text="● 연결 안됨", fg='#ff0000')
+    
+    def read_serial(self, player):
+        while self.is_connected[player]:
+            try:
+                port = self.serial_ports[player]
+                if port and port.in_waiting:
+                    line = port.readline().decode('utf-8', errors='ignore').strip()
+                    if line:
+                        self.process_data(player, line)
+            except Exception as e:
+                print(f"읽기 오류 ({player}): {e}")
+                break
+            time.sleep(0.01)
+    
+    def process_data(self, player, data):
+        # 데이터 형식: "PLAYER1:DIST:15.5" 또는 "PLAYER1:GOAL:3"
+        try:
+            parts = data.split(':')
+            if len(parts) < 3:
+                return
+            
+            player_id = parts[0]
+            data_type = parts[1]
+            value = parts[2]
+            
+            player_data = self.player1_data if player == 'player1' else self.player2_data
+            
+            if data_type == 'DIST':
+                distance = float(value)
+                player_data['distance'] = distance
+                self.update_distance_display(player, distance)
+                
+            elif data_type == 'GOAL':
+                score = int(value)
+                player_data['score'] = score
+                self.update_score_display(player, score)
+                self.check_winner()
+                
+        except Exception as e:
+            print(f"데이터 처리 오류: {e}")
+    
+    def update_score_display(self, player, score):
+        frame = self.player1_frame if player == 'player1' else self.player2_frame
+        color = '#ff0000' if player == 'player1' else '#0066ff'
+        frame.score_label.config(text=str(score), fg=color)
+        
+        # 득점 효과
+        frame.score_label.config(font=('Arial', 140, 'bold'))
+        self.root.after(200, lambda: frame.score_label.config(font=('Arial', 120, 'bold')))
+        
+        if self.game_status == 'ready':
+            self.game_status = 'playing'
+            self.game_status_label.config(text="🏒 GAME ON!", fg='#00ff00')
+    
+    def update_distance_display(self, player, distance):
+        frame = self.player1_frame if player == 'player1' else self.player2_frame
+        
+        # 거리에 따른 색상 변경
+        if distance < 15:
+            color = '#ff0000'
+            status = "⚠️ DANGER ZONE!"
+        elif distance < 30:
+            color = '#ffaa00'
+            status = "● PLAYING"
+        else:
+            color = '#00ff00'
+            status = "● READY"
+        
+        frame.distance_label.config(text=f"{distance:.1f} cm", fg=color)
+        frame.status_label.config(text=status, fg=color)
+        
+        # 거리 바 그래프
+        canvas = frame.distance_bar
+        canvas.delete('all')
+        max_dist = 100
+        bar_width = min(distance / max_dist, 1.0) * canvas.winfo_width()
+        canvas.create_rectangle(0, 0, bar_width, 30, fill=color, outline='')
+    
+    def check_winner(self):
+        if self.player1_data['score'] >= self.max_score:
+            self.game_status = 'finished'
+            self.game_status_label.config(text="🏆 PLAYER 1 WINS!", fg='#ff0000')
+            self.player1_frame.status_label.config(text="🏆 WINNER!", fg='#ffff00')
+            messagebox.showinfo("게임 종료", "Player 1 승리!")
+            
+        elif self.player2_data['score'] >= self.max_score:
+            self.game_status = 'finished'
+            self.game_status_label.config(text="🏆 PLAYER 2 WINS!", fg='#0066ff')
+            self.player2_frame.status_label.config(text="🏆 WINNER!", fg='#ffff00')
+            messagebox.showinfo("게임 종료", "Player 2 승리!")
+    
+    def reset_game(self):
+        self.game_status = 'ready'
+        self.game_status_label.config(text="🏒 READY TO PLAY", fg='#00ff00')
+        
+        # 데이터 초기화
+        self.player1_data = {'score': 0, 'distance': 0, 'status': 'ready'}
+        self.player2_data = {'score': 0, 'distance': 0, 'status': 'ready'}
+        
+        # UI 업데이트
+        self.player1_frame.score_label.config(text="0", fg='#ff0000')
+        self.player2_frame.score_label.config(text="0", fg='#0066ff')
+        self.player1_frame.distance_label.config(text="-- cm", fg='white')
+        self.player2_frame.distance_label.config(text="-- cm", fg='white')
+        self.player1_frame.status_label.config(text="● READY", fg='#ffff00')
+        self.player2_frame.status_label.config(text="● READY", fg='#ffff00')
+        self.player1_frame.distance_bar.delete('all')
+        self.player2_frame.distance_bar.delete('all')
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = AirHockeyMonitor(root)
+    root.mainloop()
