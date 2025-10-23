@@ -1,0 +1,72 @@
+#define TRIG_PIN 2
+#define ECHO_PIN 3
+#define THRESHOLD 15  // 감지 거리 임계값 (cm)
+
+// 플레이어 식별 (각 아두이노마다 변경)
+#define PLAYER_ID "PLAYER1"  // 다른 아두이노는 "PLAYER2"로 변경
+
+// 상태 변수
+int opponentScore = 0;  // 상대방 점수 (내 골대에 들어간 횟수)
+bool isDetecting = false;
+unsigned long lastUpdate = 0;
+
+void setup() {
+  Serial.begin(9600);
+  
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  
+  delay(1000);
+  
+  // 시작 신호
+  Serial.print(PLAYER_ID);
+  Serial.println(":READY");
+}
+
+void loop() {
+  long duration;
+  float distance;
+  
+  // 초음파 센서로 거리 측정
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  
+  duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  distance = duration * 0.034 / 2;
+  
+  // 거리 데이터 전송 (0.1초마다)
+  unsigned long currentTime = millis();
+  if (currentTime - lastUpdate >= 100) {
+    lastUpdate = currentTime;
+    
+    if (distance > 0 && distance < 400) {  // 유효한 거리만 전송
+      Serial.print(PLAYER_ID);
+      Serial.print(":DIST:");
+      Serial.println(distance);
+    }
+  }
+  
+  // 퍽이 골대에 들어왔을 때 (거리가 임계값 이내로 감지)
+  if (distance > 0 && distance < THRESHOLD && !isDetecting) {
+    isDetecting = true;
+    opponentScore++;
+    
+    // 득점 데이터 전송
+    Serial.print(PLAYER_ID);
+    Serial.print(":GOAL:");
+    Serial.println(opponentScore);
+    
+    delay(1000);  // 중복 감지 방지
+  }
+  
+  // 퍽이 감지 범위를 벗어났을 때
+  if (distance >= THRESHOLD || distance == 0) {
+    isDetecting = false;
+  }
+  
+  delay(50);  // 센서 안정화
+}
