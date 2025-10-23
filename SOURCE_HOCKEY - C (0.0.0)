@@ -1,0 +1,107 @@
+// Air Hockey Score Monitor - Arduino Code
+// 초음파 센서: Echo=핀2, Trig=핀3
+
+const int ECHO_PIN = 2;
+const int TRIG_PIN = 3;
+
+// 골 감지 설정
+const float GOAL_THRESHOLD = 10.0;  // 골 감지 거리 (cm) - 이 값보다 가까우면 골
+const int DEBOUNCE_TIME = 1000;     // 골 감지 후 대기 시간 (ms)
+
+// 변수
+int score = 0;
+float currentDistance = 0;
+bool goalDetected = false;
+unsigned long lastGoalTime = 0;
+unsigned long lastSendTime = 0;
+const int SEND_INTERVAL = 100;  // 거리 데이터 전송 주기 (ms)
+
+void setup() {
+  Serial.begin(9600);
+  
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  
+  // 시작 신호
+  delay(1000);
+  Serial.println("PLAYER1:STATUS:READY");
+  Serial.print("PLAYER1:GOAL:");
+  Serial.println(score);
+}
+
+void loop() {
+  // 거리 측정
+  currentDistance = measureDistance();
+  
+  // 유효한 거리인지 확인 (0~400cm)
+  if (currentDistance > 0 && currentDistance < 400) {
+    
+    // 주기적으로 거리 데이터 전송
+    if (millis() - lastSendTime >= SEND_INTERVAL) {
+      Serial.print("PLAYER1:DIST:");
+      Serial.println(currentDistance, 1);
+      lastSendTime = millis();
+    }
+    
+    // 골 감지
+    if (currentDistance <= GOAL_THRESHOLD && !goalDetected) {
+      // 디바운스 확인
+      if (millis() - lastGoalTime >= DEBOUNCE_TIME) {
+        score++;
+        goalDetected = true;
+        lastGoalTime = millis();
+        
+        // 골 점수 전송
+        Serial.print("PLAYER1:GOAL:");
+        Serial.println(score);
+        
+        // 골 감지 신호 (선택사항 - 부저나 LED 연결 시 사용)
+        tone(11, 1000, 200);  // 핀 11에 부저 연결 시
+      }
+    }
+    
+    // 골 상태 리셋 (거리가 다시 멀어지면)
+    if (currentDistance > GOAL_THRESHOLD + 5) {
+      goalDetected = false;
+    }
+  }
+  
+  delay(50);  // 측정 주기
+}
+
+// 초음파 센서로 거리 측정 함수
+float measureDistance() {
+  // Trig 핀으로 초음파 발사
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  
+  // Echo 핀으로 반사파 수신
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);  // 30ms 타임아웃
+  
+  // 거리 계산 (cm)
+  // 음속 = 340 m/s = 0.034 cm/us
+  // 거리 = (시간 * 속도) / 2 (왕복 거리이므로 2로 나눔)
+  float distance = duration * 0.034 / 2;
+  
+  return distance;
+}
+
+// 시리얼 명령 수신 (선택사항)
+void serialEvent() {
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    
+    // 리셋 명령
+    if (command == "RESET") {
+      score = 0;
+      goalDetected = false;
+      Serial.println("PLAYER1:STATUS:RESET");
+      Serial.print("PLAYER1:GOAL:");
+      Serial.println(score);
+    }
+  }
+}
